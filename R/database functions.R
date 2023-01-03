@@ -70,15 +70,7 @@
   multipleAdmissionsAndUnique <- function (cohort, code_list_primary, code_list_secondary = NULL,
                                            code_type, time_gap = 0, have_history = FALSE, condition = NULL) {
     
-  # cohort <- cohort_A
-  # code_list_primary <- ie_codes_narrow
-  # code_list_secondary <- NULL
-  # code_type <- "ICD"
-  # time_gap <- 180L
-  # have_history <- TRUE
-  # condition <- "Infective Endocarditis narrow"
-    
-    ## Melt the cohort, and identify those that have the correct diagnosis/procedure
+  ## Melt the cohort, and identify those that have the correct diagnosis/procedure
 
     melted_cohort <- meltAndTrim(cohort, code_type)
     melted_cohort[, condition_flag := ((outcome_numb == 1 & diag_code %in% code_list_primary) | (diag_code %in% code_list_secondary))]
