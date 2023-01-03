@@ -1,0 +1,300 @@
+---
+title: "I-SPIE_preliminary_analysis"
+author: "Ric Campbell"
+date: "29/06/2021"
+output: html_document
+---
+
+## FOR INTERNAL PROJECT USE ONLY, PLEASE DO NOT SHARE BEYOND PROJECT TEAM
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(data.table)
+library(ggplot2)
+library(scales)
+library(kableExtra)
+library(lubridate)
+
+createOutputTable <- function(table) {
+  table_vars <- colnames(table)[!(colnames(table) %in% c("30-Day Period", "N"))]
+  
+  tables_formula <- as.formula(paste0("`30-Day Period` ~ `", paste(table_vars, collapse = "` + `"), "`"))
+  
+  output_table <- dcast(table, 
+                        tables_formula,
+                        fill = 0L,
+                        drop = FALSE,
+                        value.var = "N")[order(`30-Day Period`)]
+  
+  row_spec(column_spec(kable_styling(kbl(output_table), bootstrap_options = c("striped", "hover", "condensed"), fixed_thead = TRUE), 12, bold = TRUE), 16, bold = TRUE)
+}
+
+## Read in IE cohort
+
+  ie_cohort <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/IE_cohort_risk_discharge_causal_180_UoS_2021-11-29.rds")
+  
+  invasive_procedures <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/first_invasive_procedure_per_date_patient.rds")
+  
+  
+## Reduce to only IE cases of interest, and create admission month field
+  
+  ie_cohort <- ie_cohort[index_admission == TRUE]
+  ie_cohort[, admission_month := floor_date(ADMIDATE, unit = "month")]
+  
+
+## Give all IE and invasive procedures an ID (first half of id name will be added below)
+  
+  ie_cohort[, id := 1:.N]
+  invasive_procedures[, id := 1:.N]
+
+## Change names so can tell fields apart
+  
+  setnames(ie_cohort, setdiff(colnames(ie_cohort), "ENCRYPTED_HESID"),
+           paste("ie", setdiff(colnames(ie_cohort), "ENCRYPTED_HESID"), sep = "_"))
+  
+  setnames(invasive_procedures, setdiff(colnames(invasive_procedures), "ENCRYPTED_HESID"),
+           paste("invasive", setdiff(colnames(invasive_procedures), "ENCRYPTED_HESID"), sep = "_"))
+  
+  
+## Merge together IE cases with all invasive procedures (are we interested in IE admissions with no invasive procedures)
+  
+  ie_invasive <- merge(ie_cohort,
+                       invasive_procedures,
+                       by = "ENCRYPTED_HESID",
+                       all = FALSE)
+  
+  
+## Create field with time between IE admission and invasive procedure  
+  
+  ie_invasive[, days_to_admission := as.integer(invasive_ADMIDATE - ie_ADMIDATE)]
+  
+  
+## Retain only records that had invasive procedure prior to IE admission (do we want ones that are same day?)
+  
+  invasive_before_ie <- ie_invasive[days_to_admission <= 0]
+  
+  
+## Create month splits for time of invasive procedure in relation to IE admission
+  
+  invasive_before_ie[, months_to_admission := ceiling(days_to_admission / 30) - 1L]
+  
+
+## No need to reduce IE admissions as have 10 years of HES data prior to first IE admission in 2010
+  
+## Remove any records that are more than 15 months prior to IE admission
+  
+  invasive_before_ie <- invasive_before_ie[months_to_admission >= -15L]
+
+```
+
+
+```{r create_tables, echo = FALSE}
+
+invasive_before_ie[, months_to_admission := as.character(months_to_admission)]
+  
+  broad_procedure_group_by_month_admi_inc <- cube(invasive_before_ie[ie_condition == "Infective Endocarditis broad",
+                                                                     .N, by = .(month = factor(months_to_admission, 
+                                                                                               levels = c("-15","-14", "-13", "-12", "-11",
+                                                                                                          "-10", "-9", "-8", "-7", "-6", "-5",
+                                                                                                          "-4", "-3", "-2", "-1", NA)),
+                                                                                invasive_procedure = factor(invasive_procedure_group,
+                                                                                                            levels = c("cardiac", "ENT", "GI", "GU",
+                                                                                                                       "haematology", "obstetric_gynae",
+                                                                                                                       "renal","respiratory", "skin", "dental", NA)))],
+                                                  .(sum(N)), by = c("month", "invasive_procedure"))
+  
+  
+  broad_procedure_group_by_month_admi_exc <- cube(invasive_before_ie[ie_condition == "Infective Endocarditis broad" & days_to_admission != 0,
+                                                                     .N, by = .(month = factor(months_to_admission, 
+                                                                                               levels = c("-15","-14", "-13", "-12", "-11",
+                                                                                                          "-10", "-9", "-8", "-7", "-6", "-5",
+                                                                                                          "-4", "-3", "-2", "-1", NA)),
+                                                                                invasive_procedure = factor(invasive_procedure_group,
+                                                                                                            levels = c("cardiac", "ENT", "GI", "GU",
+                                                                                                                       "haematology", "obstetric_gynae",
+                                                                                                                       "renal","respiratory", "skin", "dental", NA)))],
+                                                  .(sum(N)), by = c("month", "invasive_procedure"))
+  
+  
+  narrow_procedure_group_by_month_admi_inc <- cube(invasive_before_ie[ie_condition == "Infective Endocarditis narrow",
+                                                                     .N, by = .(month = factor(months_to_admission, 
+                                                                                               levels = c("-15","-14", "-13", "-12", "-11",
+                                                                                                          "-10", "-9", "-8", "-7", "-6", "-5",
+                                                                                                          "-4", "-3", "-2", "-1", NA)),
+                                                                                invasive_procedure = factor(invasive_procedure_group,
+                                                                                                            levels = c("cardiac", "ENT", "GI", "GU",
+                                                                                                                       "haematology", "obstetric_gynae",
+                                                                                                                       "renal","respiratory", "skin", "dental", NA)))],
+                                                  .(sum(N)), by = c("month", "invasive_procedure"))
+  
+  
+  narrow_procedure_group_by_month_admi_exc <- cube(invasive_before_ie[ie_condition == "Infective Endocarditis narrow" & days_to_admission != 0,
+                                                                     .N, by = .(month = factor(months_to_admission, 
+                                                                                               levels = c("-15","-14", "-13", "-12", "-11",
+                                                                                                          "-10", "-9", "-8", "-7", "-6", "-5",
+                                                                                                          "-4", "-3", "-2", "-1", NA)),
+                                                                                invasive_procedure = factor(invasive_procedure_group,
+                                                                                                            levels = c("cardiac", "ENT", "GI", "GU",
+                                                                                                                       "haematology", "obstetric_gynae",
+                                                                                                                       "renal","respiratory", "skin", "dental", NA)))],
+                                                  .(sum(N)), by = c("month", "invasive_procedure"))
+  
+  
+  broad_procedure_group_by_month_admi_inc[is.na(as.character(month)), month := "Total"]
+  broad_procedure_group_by_month_admi_inc[is.na(invasive_procedure), invasive_procedure := "Total"]
+  
+  narrow_procedure_group_by_month_admi_inc[is.na(as.character(month)), month := "Total"]
+  narrow_procedure_group_by_month_admi_inc[is.na(invasive_procedure), invasive_procedure := "Total"]
+  
+  broad_procedure_group_by_month_admi_exc[is.na(as.character(month)), month := "Total"]
+  broad_procedure_group_by_month_admi_exc[is.na(invasive_procedure), invasive_procedure := "Total"]
+  
+  narrow_procedure_group_by_month_admi_exc[is.na(as.character(month)), month := "Total"]
+  narrow_procedure_group_by_month_admi_exc[is.na(invasive_procedure), invasive_procedure := "Total"]
+  
+  setnames(broad_procedure_group_by_month_admi_inc, c("month", "V1"), c("30-Day Period", "N"))
+  setnames(broad_procedure_group_by_month_admi_exc, c("month", "V1"), c("30-Day Period", "N"))
+  
+  setnames(narrow_procedure_group_by_month_admi_inc, c("month", "V1"), c("30-Day Period", "N"))
+  setnames(narrow_procedure_group_by_month_admi_exc, c("month", "V1"), c("30-Day Period", "N"))
+
+```
+
+# Data in detail
+**Note:** Currently all tables and graphs have been created using only the first invasive surgical procedure (highest positioned relevant OPCS code) per person per admission date.
+
+
+## IE Admissions
+### Table
+The following table shows the number of IE admissions per month split by narrow/broad definitions of IE.
+
+```{r ie_admission, echo = FALSE}
+
+  ie_admissions <- (ie_cohort[, .N, by = .(ie_admission_month, ie_condition)])
+  ie_admissions_table <- dcast(ie_admissions,
+                               ie_admission_month ~ ie_condition,
+                               fill = 0L,
+                               drop = FALSE,
+                               value.var = "N")[order(ie_admission_month)]
+  ie_admissions_table[, ie_admission_month := as.character(ie_admission_month)]
+  
+  ie_admissions_table <- rbind(ie_admissions_table, list("Total", ie_admissions[ie_condition == "Infective Endocarditis broad", sum(N)],
+                               ie_admissions[ie_condition == "Infective Endocarditis narrow", sum(N)]))
+  
+
+  row_spec(kable_styling(kbl(ie_admissions_table), bootstrap_options = c("striped", "hover", "condensed"), fixed_thead = TRUE), 73, bold = TRUE)
+
+
+```
+
+### Graph
+The following graph shows the number of IE admissions per month split by narrow/broad definitions of IE.
+
+```{r ie_admissions, echo = FALSE, message = FALSE}
+
+  ggplot(ie_cohort[ie_index_admission == TRUE, .N, by = .(ie_admission_month, ie_condition)],
+         mapping = aes(x = ie_admission_month, y = N, colour = ie_condition)) +
+    geom_point() +
+    geom_smooth() +
+    ggtitle("Case Admissions per Month split by condition definition")
+
+```
+
+
+## Broad definition
+### Tables
+The following tables summarise the total number of invasive procedures prior to admission meeting the *broad* definition of IE.
+The only difference between the two tables is that the first includes any invasive procedures that occurred on the day of IE admission, while the second table does not include invasive procedures that occurred on the same day as IE admission. (This currently means that the period labeled as -1 is only 29 days long while all others are 30 day periods).
+
+```{r broad_summary_tables, echo=FALSE}
+
+  createOutputTable(broad_procedure_group_by_month_admi_inc)
+  createOutputTable(broad_procedure_group_by_month_admi_exc)
+
+```
+
+### Graphs
+The following graphs summarise the total number of invasive procedures prior to admission meeting the *broad* definition of IE.
+The only difference between the two tables is that the first includes any invasive procedures that occurred on the day of IE admission, while the second table does not include invasive procedures that occurred on the same day as IE admission. (This currently means that the period labeled as -1 is only 29 days long while all others are 30 day periods).
+
+```{r broad_graphs, echo = FALSE}
+
+ggplot(broad_procedure_group_by_month_admi_inc[`30-Day Period` != "Total",
+                                                 .(`30-Day Period` = as.numeric(levels(`30-Day Period`)[`30-Day Period`]),
+                                                   invasive_procedure, N)],
+         aes(x = `30-Day Period`, y = N, colour = invasive_procedure)) +
+    geom_point() + 
+    geom_line() +
+    scale_y_continuous(limits = c(0,NA)) +
+    scale_x_continuous(breaks = -15:-1,
+                       minor_breaks = NULL,
+                       name = "30-Day Period prior to IE admission") +
+    ggtitle("Number of invasive surgical procedures split by procedure group in 30-day
+            periods before admission for IE using the broad definition")
+  
+  
+  ggplot(broad_procedure_group_by_month_admi_exc[`30-Day Period` != "Total",
+                                                 .(`30-Day Period` = as.numeric(levels(`30-Day Period`)[`30-Day Period`]),
+                                                   invasive_procedure, N)],
+         aes(x = `30-Day Period`, y = N, colour = invasive_procedure)) +
+    geom_point() + 
+    geom_line() +
+    scale_y_continuous(limits = c(0,NA)) +
+    scale_x_continuous(breaks = -15:-1,
+                       minor_breaks = NULL,
+                       name = "30-Day Period prior to IE admission") +
+    ggtitle("Number of invasive surgical procedures split by procedure group in 30-day
+            periods (excluding day of admission) before admission for IE using the broad definition")
+  
+```
+
+
+## Narrow definition
+### Tables
+The following tables summarise the total number of invasive procedures prior to admission meeting the *narrow* definition of IE.
+The only difference between the two tables is that the first includes any invasive procedures that occurred on the day of IE admission, while the second table does not include invasive procedures that occurred on the same day as IE admission. (This currently means that the period labeled as -1 is only 29 days long while all others are 30 day periods).
+
+```{r narrow_summary_table, echo = FALSE}
+
+  createOutputTable(narrow_procedure_group_by_month_admi_inc)
+  createOutputTable(narrow_procedure_group_by_month_admi_exc)
+  
+```
+
+### Graphs
+The following graphs summarise the total number of invasive procedures prior to admission meeting the *narrow* definition of IE.
+The only difference between the two tables is that the first includes any invasive procedures that occurred on the day of IE admission, while the second table does not include invasive procedures that occurred on the same day as IE admission. (This currently means that the period labeled as -1 is only 29 days long while all others are 30 day periods).
+
+
+```{r narrow_graphs, echo = FALSE}
+
+ggplot(narrow_procedure_group_by_month_admi_inc[`30-Day Period` != "Total",
+                                                 .(`30-Day Period` = as.numeric(levels(`30-Day Period`)[`30-Day Period`]),
+                                                   invasive_procedure, N)],
+         aes(x = `30-Day Period`, y = N, colour = invasive_procedure)) +
+    geom_point() + 
+    geom_line() +
+    scale_y_continuous(limits = c(0,NA)) +
+    scale_x_continuous(breaks = -15:-1,
+                       minor_breaks = NULL,
+                       name = "30-Day Period prior to IE admission") +
+    ggtitle("Number of invasive surgical procedures split by procedure group in 30-day
+            periods before admission for IE using the narrow definition")
+  
+  
+  ggplot(narrow_procedure_group_by_month_admi_exc[`30-Day Period` != "Total",
+                                                 .(`30-Day Period` = as.numeric(levels(`30-Day Period`)[`30-Day Period`]),
+                                                   invasive_procedure, N)],
+         aes(x = `30-Day Period`, y = N, colour = invasive_procedure)) +
+    geom_point() + 
+    geom_line() +
+    scale_y_continuous(limits = c(0,NA)) +
+    scale_x_continuous(breaks = -15:-1,
+                       minor_breaks = NULL,
+                       name = "30-Day Period prior to IE admission") +
+    ggtitle("Number of invasive surgical procedures split by procedure group in 30-day
+            periods (excluding day of admission) before admission for IE using the narrow definition")
+  
+```
+
