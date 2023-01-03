@@ -1,0 +1,367 @@
+---
+title: "IE cases and procedures over time"
+author: "Ric Campbell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+## FOR INTERNAL PROJECT USE ONLY
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(data.table)
+library(ggplot2)
+library(scales)
+library(lubridate)
+library(kableExtra)
+
+
+## Function for data of individual procedure over number of IE cases
+
+individual_procedure_over_cases <- function(ie_invasive_data, number_ie_cases_data, procedure_name) {
+  
+  
+  number_of_procedures_per_month_within_15_months <- ie_invasive_data[invasive_procedure == procedure_name,
+                                                                      .(procedure_count = .N), by = invasive_admission_month]
+  
+  ie_cases_procedures_per_month <- merge(number_of_procedures_per_month_within_15_months,
+                                         number_ie_cases_data,
+                                         by.x = "invasive_admission_month",
+                                         by.y = "ie_15_month_dates",
+                                         all.y = TRUE)
+  
+  ie_cases_procedures_per_month[is.na(procedure_count), procedure_count := 0L]
+  
+  ie_cases_procedures_per_month[, procedure_per_case := procedure_count/ie_cases_count]
+  
+  return(ie_cases_procedures_per_month)
+      
+}
+      
+      
+```
+
+
+```{r read_clean_data, include = FALSE}
+
+## Read in IE cohort
+
+  ie_cohort <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/IE_cohort_risk_discharge_causal_180_UoS_2022-02-14.rds")
+  
+  
+## Change ADMIDATE to date type
+  
+  ie_cohort[, ADMIDATE := as.Date(ADMIDATE, format = "%Y-%m-%d")]
+  
+
+## Reduce to only IE cases of interest, broad condition, and create admission month field
+
+  ie_cohort <- ie_cohort[index_admission == TRUE]
+  ie_cohort <- ie_cohort[condition == "Infective Endocarditis broad"]
+  ie_cohort[, admission_month := floor_date(ADMIDATE, unit = "month")]
+
+  
+####~~~~ Read in different file dependent on selection of procedures want to look at ~~~~~~####    
+  
+  invasive_procedures <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/first_invasive_procedure_per_procedure_per_date_patient_heart_rule.rds")
+  
+  invasive_procedures[, admission_month := floor_date(ADMIDATE, unit = "month")]
+  
+  invasive_procedures_reduced_date <- invasive_procedures[ADMIDATE >= "2009-01-01"]
+  
+  
+## Merge together IE cases and invasive procedures so can limit to only those procedures in the 15 month prior to IE
+  
+  ## Change names so can tell fields apart
+
+  setnames(ie_cohort, setdiff(colnames(ie_cohort), "ENCRYPTED_HESID"),
+           paste("ie", setdiff(colnames(ie_cohort), "ENCRYPTED_HESID"), sep = "_"))
+  
+  setnames(invasive_procedures, setdiff(colnames(invasive_procedures), "ENCRYPTED_HESID"),
+           paste("invasive", setdiff(colnames(invasive_procedures), "ENCRYPTED_HESID"), sep = "_"))
+  
+  
+  ie_invasive <- merge(ie_cohort,
+                       invasive_procedures,
+                       by = "ENCRYPTED_HESID",
+                       all.x = TRUE)
+  
+  
+## Create field with time between IE admission and invasive procedure  
+
+  ie_invasive[, days_to_admission := as.integer(invasive_ADMIDATE - ie_ADMIDATE)]
+
+
+## Retain only records that had invasive procedure prior to IE admission (do we want ones that are same day?)
+
+  invasive_before_ie <- ie_invasive[days_to_admission <= 0]
+
+
+## Retain only records that have an invasive procedure that follows the heart rule (certain procedures can't be on same admissions as heart valve repair/replace)
+
+  invasive_before_ie_heart_rule <- invasive_before_ie[invasive_valid_procedure_including_heart_rule == TRUE]
+
+  
+## Create month splits for time of invasive procedure in relation to IE admission, one for with and one for without day of admissions
+
+  invasive_before_ie_heart_rule[, months_to_admission_with_admi_day := ceiling(days_to_admission / 30) - 1L]
+  invasive_before_ie_heart_rule[days_to_admission != 0
+                                , months_to_admission_without_admi_day := ceiling((days_to_admission + 1L) / 30) - 1L]
+
+
+## No need to reduce IE admissions as have 10 years of HES data prior to first IE admission in 2010
+
+## Remove any records that are more than 15 months prior to IE admission
+## Have to create two table as they are different limits and cannot limit in table creation below as need them as characters
+  
+  invasive_before_ie_heart_rule_with <- invasive_before_ie_heart_rule[months_to_admission_with_admi_day >= -15L]
+  
+  invasive_before_ie_heart_rule_without <- invasive_before_ie_heart_rule[months_to_admission_without_admi_day >= -15L]
+
+```
+
+```{r ie_cases_to_count_procs_per_month, include = FALSE}
+
+## Create table of number of invasive procedures per month by number of patients per month
+  
+  ## IE cases
+  ## Need to include an IE case for all 15 months counting procedures, only interested in first admission per person
+  
+    ie_cohort_date <- ie_cohort[ie_index_admission_number == 1, .(ENCRYPTED_HESID, ie_admission_month)]
+    
+    index <- 1L
+    while (index <= 15){
+      ie_cohort_date[, paste0("admision_month_minus_", index) := ie_admission_month %m-% months(index)]
+      
+      index <- index +1
+    }
+  
+  ## Melt so each admission has 15 months which we want to count it for
+  
+    melt_fields <- colnames(ie_cohort_date[, !"ENCRYPTED_HESID"])
+    
+    melted_ie_months <- melt(ie_cohort_date, measure.vars = melt_fields, variable.name = "time_to_admission", value.name = "ie_15_month_dates")
+    
+    
+    number_of_ie_cases_counting_procedures_per_month <- melted_ie_months[, .(ie_cases_count = .N), by = ie_15_month_dates]
+
+```
+
+
+```{r procedure_splits_merges, include = FALSE}
+
+## All procedures - can't use function as requires a string in 'i'
+
+  number_of_procedures_per_month_within_15_months <- invasive_before_ie_heart_rule_without[, .(procedure_count = .N), by = invasive_admission_month]
+
+## Merge ie cases count and procedure counts
+
+  ie_cases_procedures_per_month <- merge(number_of_procedures_per_month_within_15_months,
+                                         number_of_ie_cases_counting_procedures_per_month,
+                                         by.x = "invasive_admission_month",
+                                         by.y = "ie_15_month_dates",
+                                         all.y = TRUE)
+
+  ie_cases_procedures_per_month[, procedure_per_case := procedure_count/ie_cases_count]
+
+
+  ## Implanted pacemakers/defibulators
+  ie_cases_procedures_per_month_pace <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                        number_of_ie_cases_counting_procedures_per_month,
+                                                                        "implantation_cardiac_pacemakers_defibrillators")
+  
+  ## Endoscopic upper GI procedures
+  ie_cases_procedures_per_month_upper_gi <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                            number_of_ie_cases_counting_procedures_per_month,
+                                                                            "endoscopic_upper_gi")
+  
+  ## Endoscopic lower GI procedures
+  ie_cases_procedures_per_month_lower_gi <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                            number_of_ie_cases_counting_procedures_per_month,
+                                                                            "endoscopic_lower_gi")
+  
+  ## Extractions and surgical removal of teeth
+  ie_cases_procedures_per_month_teeth <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                         number_of_ie_cases_counting_procedures_per_month,
+                                                                         "extraction_surgical_removal_teeth")
+  
+  ## Bronchoscopic procedure
+  ie_cases_procedures_per_month_bronc <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                         number_of_ie_cases_counting_procedures_per_month,
+                                                                         "bronchoscopic")
+  
+  ## Percutaneous coronary procedures and stents
+  ie_cases_procedures_per_month_percutaneous <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                                number_of_ie_cases_counting_procedures_per_month,
+                                                                                "percutaneous_coronary_procs_stents")
+  
+  ## Haemodialysis, haemofiltration, haemoperfusion
+  ie_cases_procedures_per_month_haemodialysis <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                                 number_of_ie_cases_counting_procedures_per_month,
+                                                                                 "haemodialysis_haemofiltration_haemoperfusion")
+  
+  ## Blood transfusion/red cell or plasma exchange
+  ie_cases_procedures_per_month_blood <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                         number_of_ie_cases_counting_procedures_per_month,
+                                                                         "blood_transfusion")
+  
+  ## Coronary angiography
+  ie_cases_procedures_per_month_angio <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                         number_of_ie_cases_counting_procedures_per_month,
+                                                                         "coronary_angiography")
+  
+  ## Cystocopy
+  ie_cases_procedures_per_month_cystocopy <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                             number_of_ie_cases_counting_procedures_per_month,
+                                                                             "cystoscopic")
+  
+  ## Skin and wound management
+  ie_cases_procedures_per_month_skin <- individual_procedure_over_cases(invasive_before_ie_heart_rule_without,
+                                                                        number_of_ie_cases_counting_procedures_per_month,
+                                                                        "skin_wound_management")
+
+```
+
+## Graphs looking at number of IE admissions over time
+
+```{r ie_graphs, echo = FALSE, message = FALSE}
+
+## Graph of number of index IE admission per month in period of interest
+
+  ggplot(ie_cohort[, .N, by = ie_admission_month],
+         mapping = aes(x = ie_admission_month, y = N)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Broad IE incidence per month over the study period - includes all index admissions", 80), collapse = "\n"))
+
+
+  ggplot(ie_cohort[ie_index_admission_number == 1, .N, by = ie_admission_month],
+           mapping = aes(x = ie_admission_month, y = N)) +
+      geom_point() +
+      geom_line(color= "blue") +
+      labs(title = paste(strwrap("Broad IE incidence per month over the study period - includes only first index admission per person", 80), collapse = "\n"))
+```
+  
+  
+## Graphs looking at the number of invasive medical procedures over time
+The first graph includes all invasive procedures in data provided for people who had a IE admission
+The second graph reduces to just invasive procedures that happened in the 15 months prior to an IE admission, and does not include those that occur on the same day as the IE admission.
+
+```{r procedures_graphs, echo = FALSE, message = FALSE}
+  
+  ggplot(invasive_procedures_reduced_date[, .N, by = admission_month],
+         mapping = aes(x = admission_month, y = N)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of invasive procedures (one procedure type per person per day), per month over study period", 80), collapse = "\n"))
+  
+    ggplot(invasive_before_ie_heart_rule_without[, .N, by = invasive_admission_month],
+         mapping = aes(x = invasive_admission_month, y = N)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of invasive procedures (one procedure type per person per day), per month within 15 months of IE admissions excluding procedures on day of IE admission", 80), collapse = "\n"))
+    
+    
+    ggplot(ie_cases_procedures_per_month,
+           mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+      geom_point() +
+      geom_line(color= "blue") +
+      labs(title = paste(strwrap("Number of invasive procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+```
+
+*Note:* IE cases admission date has been rounded to the start of the month, so if an admission happened on the first or last day of the month, they were included in this month and the preceding 15 months for invasive procedures that patient had, and in the denominator for procedures per case. However, invasive procedures are only included if they occur before the admission for IE, invasive procedure that occured on the day of admission are not included.
+  
+  
+  
+## Graphs looking at individual procedure types
+These graphs include only those invasive procedures that happened in the 15 months prior to an IE admission, and does not include those that occur on the same day as the IE admission.
+```{r, echo = FALSE, message = FALSE}
+
+  ggplot(ie_cases_procedures_per_month_pace[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of pacemakers/defibulators procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_upper_gi[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of endoscopic upper GI procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_lower_gi[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of endoscopic lower GI procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_teeth[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of extractions and surgical removal of teeth procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_bronc[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of bronchoscopic procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_percutaneous[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of percutaneous coronary procedures and stents per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_haemodialysis[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of haemodialysis procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_blood[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of blood transfusion/red blood cell or plasma exchange procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_angio[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of coronary angiography procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_cystocopy[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of cystocopy procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+  
+  
+  ggplot(ie_cases_procedures_per_month_skin[],
+         mapping = aes(x = invasive_admission_month, y = procedure_per_case)) +
+    geom_point() +
+    geom_line(color= "blue") +
+    labs(title = paste(strwrap("Number of skin and wound management procedures per broad IE case that are included in the 15 months invasive procedures are being counted for, including admission month", 80), collapse = "\n"))
+
+    
+```
+
+
+
+
+
+
+
+
+
