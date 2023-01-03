@@ -1,0 +1,392 @@
+---
+title: "Causal Organism against Invasive Procedures"
+author: "Ric Campbell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+# FOR INTERNAL PROJECT USE ONLY, PLEASE DO NOT SHARE BEYOND PROJECT TEAM  
+  
+  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(data.table)
+library(ggplot2)
+library(scales)
+library(kableExtra)
+library(lubridate)
+
+## Table creating functions
+
+createOutputTableProcedureGroups <- function(table) {
+  
+  table_vars <- colnames(table)[!(colnames(table) %in% c("invasive_procedure_group", "N"))]
+  
+  tables_formula <- as.formula(paste0("`invasive_procedure_group` ~ `", paste(table_vars, collapse = "` + `"), "`"))
+  
+  output_table <- dcast(table, 
+                        tables_formula,
+                        fill = 0L,
+                        drop = FALSE,
+                        value.var = "N")[order(invasive_procedure_group)]
+  
+  output_table[, causal_org_recorded := Total - not_recorded][, not_recorded := NULL]
+  
+  output_table <- cbind(output_table[, "invasive_procedure_group"],
+                        apply(output_table[, !"invasive_procedure_group"], 2, function(x, y) paste0(x, " (", round((x/y)*100, 1), "%)"), output_table$Total))
+  
+  
+  setcolorder(output_table, c("invasive_procedure_group", "Total", "causal_org_recorded"))
+ 
+## Do not need to surpress figures below 7 as data is at the national level   
+  # cols <- setdiff(colnames(output_table), "invasive_procedure_group")
+  # output_table[, (cols) := lapply(.SD, function(x) replace(x, gsub(" .*$", "", x) == "5", "*")), .SDcols = cols]
+  
+  
+  row_spec(column_spec(kable_styling(kbl(output_table), bootstrap_options = c("striped", "hover", "condensed"), fixed_thead = TRUE), 1, bold = TRUE), 11, bold = TRUE)
+}
+
+createOutputTableProcedure <- function(table) {
+  
+  table_vars <- colnames(table)[!(colnames(table) %in% c("invasive_procedure", "N"))]
+  
+  tables_formula <- as.formula(paste0("`invasive_procedure` ~ `", paste(table_vars, collapse = "` + `"), "`"))
+  
+  output_table <- dcast(table, 
+                        tables_formula,
+                        fill = 0L,
+                        drop = FALSE,
+                        value.var = "N")[order(invasive_procedure)]
+  
+  output_table[, causal_org_recorded := Total - not_recorded][, not_recorded := NULL]
+  
+  output_table <- cbind(output_table[, "invasive_procedure"],
+                        apply(output_table[, !"invasive_procedure"], 2, function(x, y) paste0(x, " (", round((x/y)*100, 1), "%)"), output_table$Total))
+  
+  
+  setcolorder(output_table, c("invasive_procedure", "Total", "causal_org_recorded"))
+  
+## Do not need to surpress figures below 7 as data is at the national level
+  # cols <- setdiff(colnames(output_table), "invasive_procedure_group")
+  # output_table[, (cols) := lapply(.SD, function(x) replace(x, gsub(" .*$", "", x) == "5", "*")), .SDcols = cols]
+  
+  
+  row_spec(column_spec(kable_styling(kbl(output_table), bootstrap_options = c("striped", "hover", "condensed"), fixed_thead = TRUE), 1, bold = TRUE), output_table[,.N], bold = TRUE)
+}
+
+
+createOutputTableGIIntervention <- function(table) {
+  
+  table_vars <- colnames(table)[!(colnames(table) %in% c("gi_procedure_type", "N"))]
+  
+  tables_formula <- as.formula(paste0("`gi_procedure_type` ~ `", paste(table_vars, collapse = "` + `"), "`"))
+  
+  output_table <- dcast(table, 
+                        tables_formula,
+                        fill = 0L,
+                        drop = FALSE,
+                        value.var = "N")[order(gi_procedure_type)]
+  
+  output_table[, causal_org_recorded := Total - not_recorded][, not_recorded := NULL]
+  
+  output_table <- cbind(output_table[, "gi_procedure_type"],
+                        apply(output_table[, !"gi_procedure_type"], 2, function(x, y) paste0(x, " (", round((x/y)*100, 1), "%)"), output_table$Total))
+  
+  
+  setcolorder(output_table, c("gi_procedure_type", "Total", "causal_org_recorded"))
+  
+## Do not need to surpress figures below 7 as data is at the national level
+  # cols <- setdiff(colnames(output_table), "invasive_procedure_group")
+  # output_table[, (cols) := lapply(.SD, function(x) replace(x, gsub(" .*$", "", x) == "5", "*")), .SDcols = cols]
+  
+  
+  row_spec(column_spec(kable_styling(kbl(output_table), bootstrap_options = c("striped", "hover", "condensed"), fixed_thead = TRUE), 1, bold = TRUE), output_table[,.N], bold = TRUE)
+}
+
+
+```
+
+
+```{r prep_data, echo=FALSE}
+## Read in IE cohort
+
+  ie_cohort <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/IE_cohort_risk_discharge_causal_180_UoS_2022-02-14.rds")
+  
+  
+## Change ADMIDATE to date type
+  
+  ie_cohort[, ADMIDATE := as.Date(ADMIDATE, format = "%Y-%m-%d")]
+
+  
+## Reduce to only IE cases of interest, and create admission month field
+## Reduced to broad definition in table creation as well, but here as easier to remove to make sure
+
+  ie_cohort <- ie_cohort[index_admission == TRUE & condition == "Infective Endocarditis broad"]
+  
+  ie_cohort <- ie_cohort[index_admission_number == 1L]
+  
+  ie_cohort <- ie_cohort[non_elective_admission == TRUE]
+  
+  ie_cohort <- ie_cohort[(length_of_stay > 2L | length_of_stay < 0L |  is.na(length_of_stay)) 
+                               | (discharged_alive == FALSE | is.na(discharged_alive))]
+  
+  
+  ie_cohort[, admission_month := floor_date(ADMIDATE, unit = "month")]
+
+  
+## For this table we have a 'mixed' value for causal org, so can create a single field for the causal organism relating to IE admissions
+  
+  ## Check there is only one line for person-date-condition triplet
+  
+  stopifnot(ie_cohort[, .N, by = .(ENCRYPTED_HESID, ADMIDATE, condition)][N > 1, .N] == 0)
+  
+  
+  ## Then sum per this triplet (so sum logicals per row) - any > 1 will fall into the 'mixed' category
+
+  ie_cohort[, causal_org_count := sum(all_staphylococcal_ie, group_a_streptococci_ie, group_b_streptococci_ie,
+                                      group_d_streptococci_ie, non_strep_non_staph_ie, other_streptococci_ie, streptococci_pneumonia_ie,
+                                      unspecified_streptococci_ie), by = .(ENCRYPTED_HESID, ADMIDATE, condition)]  
+  
+  ie_cohort[causal_org_count == 1 & all_staphylococcal_ie == TRUE, overall_causal_org := "staph"]
+  ie_cohort[causal_org_count == 1 & group_a_streptococci_ie == TRUE, overall_causal_org := "group_a_strep"]
+  ie_cohort[causal_org_count == 1 & group_b_streptococci_ie == TRUE, overall_causal_org := "group_b_strep"]
+  ie_cohort[causal_org_count == 1 & group_d_streptococci_ie == TRUE, overall_causal_org := "group_d_strep"]
+  ie_cohort[causal_org_count == 1 & streptococci_pneumonia_ie == TRUE, overall_causal_org := "strep_pneum"]
+  ie_cohort[causal_org_count == 1 & other_streptococci_ie == TRUE, overall_causal_org := "other_strep"]
+  ie_cohort[causal_org_count == 1 & unspecified_streptococci_ie == TRUE, overall_causal_org := "unspecified_strep"]
+  ie_cohort[causal_org_count == 1 & non_strep_non_staph_ie == TRUE, overall_causal_org := "other_non_strep_non_staph"]
+  ie_cohort[causal_org_count > 1, overall_causal_org := "mixed_infect"]
+  
+  
+## Set NA's to "NA" as easier when cube later as uses NA as total
+  
+  ie_cohort[is.na(overall_causal_org), overall_causal_org := "not_recorded"]
+
+  
+####~~~~ Read in different file dependent on selection of procedures want to look at ~~~~~~####    
+
+  invasive_procedures <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/first_invasive_procedure_per_procedure_per_date_patient_heart_rule2022-06-16-132547.rds")
+
+## Create procedure year field
+  
+  invasive_procedures[, admission_month := floor_date(ADMIDATE, unit = "month")]
+  invasive_procedures[, procedure_year := floor_date(ADMIDATE, unit = "year")]
+  
+    
+## Give all IE and invasive procedures an ID (first half of id name will be added below)
+
+  ie_cohort[, id := 1:.N]
+  invasive_procedures[, id := 1:.N]
+
+## Change names so can tell fields apart
+
+  setnames(ie_cohort, setdiff(colnames(ie_cohort), "ENCRYPTED_HESID"),
+           paste("ie", setdiff(colnames(ie_cohort), "ENCRYPTED_HESID"), sep = "_"))
+  
+  setnames(invasive_procedures, setdiff(colnames(invasive_procedures), "ENCRYPTED_HESID"),
+           paste("invasive", setdiff(colnames(invasive_procedures), "ENCRYPTED_HESID"), sep = "_"))
+
+
+## Merge together IE cases with all invasive procedures (are we interested in IE admissions with no invasive procedures)
+
+  ie_invasive <- merge(ie_cohort,
+                       invasive_procedures,
+                       by = "ENCRYPTED_HESID",
+                       all = FALSE)
+
+
+## Create field with time between IE admission and invasive procedure  
+
+  ie_invasive[, days_to_admission := as.integer(invasive_ADMIDATE - ie_ADMIDATE)]
+
+
+## Retain only records that had invasive procedure prior to IE admission (do we want ones that are same day?)
+
+  invasive_before_ie <- ie_invasive[days_to_admission <= 0]
+
+
+## Retain only records that have an invasive procedure that follows the heart rule (certain procedures can't be on same admissions as heart valve repair/replace)
+
+  invasive_before_ie_heart_rule <- invasive_before_ie[invasive_valid_procedure_including_heart_rule == TRUE]
+
+
+## Create month splits for time of invasive procedure in relation to IE admission, one for with and one for without day of admissions
+
+  invasive_before_ie_heart_rule[, months_to_admission_with_admi_day := ceiling(days_to_admission / 30) - 1L]
+  invasive_before_ie_heart_rule[days_to_admission != 0
+                                , months_to_admission_without_admi_day := ceiling((days_to_admission + 1L) / 30) - 1L]
+
+
+## No need to reduce IE admissions as have 10 years of HES data prior to first IE admission in 2010
+  
+
+## Remove any records that are more than 3 months prior to IE admission - as this is cut off for invasive procedures that could have caused IE
+## Have to create two table as they are different limits and cannot limit in table creation below as need them as characters
+
+  invasive_before_ie_heart_rule_with <- invasive_before_ie_heart_rule[months_to_admission_with_admi_day >= -3L]
+  
+  invasive_before_ie_heart_rule_without <- invasive_before_ie_heart_rule[months_to_admission_without_admi_day >= -3L]
+  
+## Do we need to do this? ###
+  
+# ## Further reduction of cohort for stats checking - Feb-2022
+# ## Keep only the first observation for each patient-procedure-month
+#   
+#   setorder(invasive_before_ie_heart_rule_without, ENCRYPTED_HESID, ie_ADMIDATE, invasive_procedure, months_to_admission_without_admi_day)
+#   
+#   invasive_before_ie_heart_rule_without[, procedure_count := 1:.N, by = .(ENCRYPTED_HESID, invasive_procedure, months_to_admission_without_admi_day)]
+#   
+#   single_procedure_month_patient <- invasive_before_ie_heart_rule_without[procedure_count == 1L]
+
+```
+
+
+
+``` {r create_invasive_causal_table, echo = FALSE}
+
+  invasive_before_ie_heart_rule_with[, months_to_admission_with_admi_day := as.character(months_to_admission_with_admi_day)]
+  invasive_before_ie_heart_rule_without[, months_to_admission_without_admi_day := as.character(months_to_admission_with_admi_day)]
+
+  broad_procedure_group_by_month_admi_exc <- cube(invasive_before_ie_heart_rule_without[ie_condition == "Infective Endocarditis broad",
+                                                                                        .N, by = .(causal_org = factor(ie_overall_causal_org, 
+                                                                                                                       levels = c("staph",
+                                                                                                                                  "group_a_strep",
+                                                                                                                                  "group_b_strep",
+                                                                                                                                  "group_d_strep",
+                                                                                                                                  "strep_pneum",
+                                                                                                                                  "other_strep",
+                                                                                                                                  "unspecified_strep",
+                                                                                                                                  "other_non_strep_non_staph",
+                                                                                                                                  "mixed_infect",
+                                                                                                                                  "not_recorded", NA)),
+                                                                                                   invasive_procedure_group = factor(invasive_procedure_group,
+                                                                                                                                     levels = c("cardiac", "ENT",
+                                                                                                                                                "GI", "GU",
+                                                                                                                                                "haematology",
+                                                                                                                                                "obstetric_gynae",
+                                                                                                                                                "renal","respiratory",
+                                                                                                                                                "skin", "dental",
+                                                                                                                                                NA)))],
+                                                  .(sum(N)), by = c("causal_org", "invasive_procedure_group"))
+  
+
+  broad_procedure_by_month_admi_exc <- cube(invasive_before_ie_heart_rule_without[ie_condition == "Infective Endocarditis broad",
+                                                                                  .N, by = .(causal_org = factor(ie_overall_causal_org, 
+                                                                                                            levels = c("staph",
+                                                                                                                       "group_a_strep",
+                                                                                                                       "group_b_strep",
+                                                                                                                       "group_d_strep",
+                                                                                                                       "strep_pneum",
+                                                                                                                       "other_strep",
+                                                                                                                       "unspecified_strep",
+                                                                                                                       "other_non_strep_non_staph",
+                                                                                                                       "mixed_infect",
+                                                                                                                       "not_recorded", NA)),
+                                                                                             invasive_procedure = factor(invasive_procedure,
+                                                                                                                         levels = c("abortion_dilatation_curetage",
+                                                                                                                                    "blood_transfusion",
+                                                                                                                                    "bone_marrow_puncture",
+                                                                                                                                    "bronchoscopic",
+                                                                                                                                    "caesarean_delivery",
+                                                                                                                                    "colonic_surgery",
+                                                                                                                                    "coronary_angiography",
+                                                                                                                                    "coronary_artery_bypass",
+                                                                                                                                    "cystoscopic",
+                                                                                                                                    "endodontic_procedures",
+                                                                                                                                    "endoscopic_lower_gi",
+                                                                                                                                    "endoscopic_prostate",
+                                                                                                                                    "endoscopic_upper_gi",
+                                                                                                                                    "ercp",
+                                                                                                                                    "extraction_surgical_removal_teeth",
+                                                                                                                                    "haemodialysis_haemofiltration_haemoperfusion",
+                                                                                                                                    "implantation_cardiac_pacemakers_defibrillators",
+                                                                                                                                    "nasal_packing_intubation",
+                                                                                                                                    "other_endoscopic_oesophageal",
+                                                                                                                                    "other_oral_surgical_procedure",
+                                                                                                                                    "percutaneous_coronary_procs_stents",
+                                                                                                                                    "percutaneous_valve_procedures",
+                                                                                                                                    "peritoneal_dialysis",
+                                                                                                                                    "restorative_dental_procedure",
+                                                                                                                                    "scaling_gingival_procedure",
+                                                                                                                                    "skin_wound_management",
+                                                                                                                                    "tonsillectomy_adenoidectomy",
+                                                                                                                                    "transoesophageal_echocardiography",
+                                                                                                                                    "vaginal_delivery",
+                                                                                                                                    NA)))],
+                                            .(sum(N)), by = c("causal_org", "invasive_procedure"))
+
+
+```
+
+```{r upper_lower_GI_intervention_sub_table, echo=FALSE}
+
+    upper_lower_gi_procedures_only <- invasive_before_ie_heart_rule_without[invasive_procedure == "endoscopic_upper_gi" | invasive_procedure == "endoscopic_lower_gi"]
+
+    upper_lower_gi_procedures_only[, invasive_procedure := paste(invasive_procedure, invasive_intervention, sep = "_")]
+
+    broad_procedure_gi_sub_by_month_admi_exc <- cube(upper_lower_gi_procedures_only[ie_condition == "Infective Endocarditis broad",
+                                                                                           .N, by = .(causal_org = factor(ie_overall_causal_org, 
+                                                                                                                          levels = c("staph",
+                                                                                                                                     "group_a_strep",
+                                                                                                                                     "group_b_strep",
+                                                                                                                                     "group_d_strep",
+                                                                                                                                     "strep_pneum",
+                                                                                                                                     "other_strep",
+                                                                                                                                     "unspecified_strep",
+                                                                                                                                     "other_non_strep_non_staph",
+                                                                                                                                     "mixed_infect",
+                                                                                                                                     "not_recorded", NA)),
+                                                                                                      gi_procedure_type = factor(invasive_procedure,
+                                                                                                                                        levels = c("endoscopic_upper_gi_FALSE",
+                                                                                                                                                   "endoscopic_upper_gi_TRUE",
+                                                                                                                                                   "endoscopic_lower_gi_FALSE",
+                                                                                                                                                   "endoscopic_lower_gi_TRUE",
+                                                                                                                                                   NA)))],
+                                                     .(sum(N)), by = c("causal_org", "gi_procedure_type"))
+
+```
+
+```{r change_field_names, echo=FALSE}
+
+  broad_procedure_group_by_month_admi_exc[is.na(as.character(causal_org )), causal_org := "Total"]
+  broad_procedure_group_by_month_admi_exc[is.na(invasive_procedure_group), invasive_procedure_group := "Total"]
+  
+  broad_procedure_by_month_admi_exc[is.na(as.character(causal_org )), causal_org := "Total"]
+  broad_procedure_by_month_admi_exc[is.na(invasive_procedure), invasive_procedure := "Total"]
+  
+  broad_procedure_gi_sub_by_month_admi_exc[is.na(as.character(causal_org)), causal_org := "Total"]
+  broad_procedure_gi_sub_by_month_admi_exc[is.na(gi_procedure_type), gi_procedure_type := "Total"]
+  
+  setnames(broad_procedure_group_by_month_admi_exc, "V1", "N")
+  setnames(broad_procedure_by_month_admi_exc, "V1", "N")
+  setnames(broad_procedure_gi_sub_by_month_admi_exc, "V1", "N")
+
+
+```
+
+```{r round_all_numbers, echo = FALSE}
+
+## Do not need to round numbers as they are at a national level
+  # broad_procedure_group_by_month_admi_exc[, N := round(N/5)*5]
+  # broad_procedure_by_month_admi_exc[, N := round(N/5)*5]
+
+
+```
+
+## Tables to show the number of IE admissions and their causal organisims by the invasive procedure groups and procedures, that occured within the three months prior to the IE admission  
+
+
+```{r create_tables, echo=FALSE}
+
+  createOutputTableProcedureGroups(broad_procedure_group_by_month_admi_exc)
+
+## Get a warning here of 'invalid factor level, NA generated', when turning values of 5 into *
+  
+  createOutputTableProcedure(broad_procedure_by_month_admi_exc)
+  
+  createOutputTableGIIntervention(broad_procedure_gi_sub_by_month_admi_exc)
+
+```
+
