@@ -1,0 +1,248 @@
+---
+title: "I-SPIE Descriptive Statistics"
+author: "Richard Campbell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+## FOR INTERNAL PROJECT USE ONLY
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(data.table)
+library(ggplot2)
+library(scales)
+library(kableExtra)
+
+
+## Read in IE cohort
+
+  ie_cohort <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/IE_cohort_risk_discharge_causal_180_UoS_2022-02-14.rds")
+  
+  
+## Change ADMIDATE to date type
+  
+  ie_cohort[, ADMIDATE := as.Date(ADMIDATE, format = "%Y-%m-%d")]
+
+
+# create / re-name id fields
+  
+  ie_cohort[, ie_id := 1:.N]
+  
+    
+# change age field to numeric, and remove any nonsense (default) value
+
+  ie_cohort[,  ':=' (ADMIAGE = as.numeric(ADMIAGE),
+                     SEX = as.numeric(SEX))]
+  ie_cohort[ADMIAGE == 999, ADMIAGE := NA]
+  ie_cohort[discharge_date == "1800-01-01" | discharge_date == "1801-01-01", discharge_date := NA]
+  ie_cohort[(length_of_stay) < 0, length_of_stay := NA]
+  
+## also remove all length of stays that are > 0 due to these dates
+
+
+# Mostly interested in index admission and using broad definition so select just these so do not double count cases
+  
+  ie_cohort_broad <- ie_cohort[index_admission == TRUE & condition == "Infective Endocarditis broad"]
+  
+
+## Keep only first index admissions  
+## Also need to remove elective admissions and those < 3 days who were discharged alive
+
+  ie_cohort_broad <- ie_cohort_broad[index_admission_number == 1L]
+  
+  ie_cohort_broad <- ie_cohort_broad[non_elective_admission == TRUE]
+  
+  ie_cohort_broad <- ie_cohort_broad[(length_of_stay > 2L | length_of_stay < 0L |  is.na(length_of_stay)) 
+                               | (discharged_alive == FALSE | is.na(discharged_alive))]
+
+
+```
+
+
+```{r admission stats, include=FALSE}
+## For whole IE cohort!!
+## Demographics wanted (taken from example IDEA table)
+
+## Create round values used for percentages, all others will be changed to characters for formatting reasons
+
+
+  ie_cases_count <- ie_cohort_broad[, .N]
+  sex_cases_count <- ie_cohort_broad[!is.na(SEX), .N]
+  risk_level_case_count <- ie_cohort_broad[!is.na(risk_at_index), .N]
+  high_risk_cases_count <- ie_cohort_broad[risk_at_index == "High", .N]
+  medium_risk_cases_count <- ie_cohort_broad[risk_at_index == "Moderate", .N]
+  causal_org_yes_count <- ie_cohort_broad[any_causal_organism == TRUE, .N]
+  admission_meth_count <- ie_cohort_broad[!is.na(non_elective_admission), .N]
+  discharged_alive_count <- ie_cohort_broad[!is.na(discharged_alive), .N]
+  
+  
+  ie_cases <- sprintf("%1.0f", ie_cohort_broad[, .N])
+  age_cases <- sprintf("%1.0f", ie_cohort_broad[!is.na(ADMIAGE), .N])
+  age_SD <- sprintf("%.1f", ie_cohort_broad[!is.na(ADMIAGE), sd(ADMIAGE)])
+  age_mean_SD <- paste0(sprintf("%.1f", ie_cohort_broad[!is.na(ADMIAGE), mean(ADMIAGE)]), " (", age_SD, ")")
+  age_min <- sprintf("%1.0f", ie_cohort_broad[!is.na(ADMIAGE), min(ADMIAGE)])
+  age_max <- sprintf("%1.0f", ie_cohort_broad[!is.na(ADMIAGE), max(ADMIAGE)])
+  age_median_min_max <- paste0(sprintf("%.1f", ie_cohort_broad[!is.na(ADMIAGE), median(ADMIAGE)]), "(", age_min, ", ", age_max, ")")
+  
+  sex_cases <- sprintf("%1.0f", ie_cohort_broad[!is.na(SEX), .N])
+  male_pc <- sprintf("%.1f", (ie_cohort_broad[SEX == 1, .N]/sex_cases_count)*100)
+  male <- paste0(sprintf("%1.0f", ie_cohort_broad[SEX == 1, .N]), " (", male_pc, "%)")
+  female_pc <- sprintf("%.1f", (ie_cohort_broad[SEX == 2, .N]/sex_cases_count)*100)
+  female <- paste0(sprintf("%1.0f", ie_cohort_broad[SEX == 2, .N]), " (", female_pc, "%)")
+  
+  risk_level_case <- sprintf("%1.0f", ie_cohort_broad[!is.na(risk_at_index), .N])
+  high_risk_pc <- sprintf("%.1f", (ie_cohort_broad[risk_at_index == "High", .N]/risk_level_case_count)*100)
+  high_risk <-paste0(sprintf("%1.0f", ie_cohort_broad[risk_at_index == "High", .N]), " (", high_risk_pc, "%)") 
+  moderate_risk_pc <- sprintf("%.1f", (ie_cohort_broad[risk_at_index == "Moderate", .N]/risk_level_case_count)*100)
+  moderate_risk <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_at_index == "Moderate", .N]), " (", moderate_risk_pc, "%)")
+  low_unknown_risk_pc <- sprintf("%.1f", (ie_cohort_broad[risk_at_index == "Low" , .N]/risk_level_case_count)*100)
+  low_unknown_risk <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_at_index == "Low", .N]), " (", low_unknown_risk_pc, "%)")
+  
+## Percentages are of all cases with risk (which is all of them), not % of high, or % moderate
+  
+  
+  risk_reason_previous_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Previous IE", .N]/high_risk_cases_count)*100)
+  risk_reason_previous <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Previous IE", .N]), " (", risk_reason_previous_pc, "%)")
+  risk_reason_previous_I38X_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Previous IE - I38X", .N]/high_risk_cases_count)*100)
+  risk_reason_previous_I38X <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Previous IE - I38X", .N]), " (", risk_reason_previous_I38X_pc, "%)")
+  risk_reason_replacement_valve_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Replacement Heart Valve", .N]/high_risk_cases_count)*100)
+  risk_reason_replacement_valve <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Replacement Heart Valve", .N]),
+                                          " (", risk_reason_replacement_valve_pc, "%)")
+  risk_reason_repaired_valve_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Repaired Heart Valve", .N]/high_risk_cases_count)*100)
+  risk_reason_repaired_valve <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Repaired Heart Valve", .N]),
+                                       " (", risk_reason_repaired_valve_pc, "%)")
+  risk_reason_cyanotic_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Cyanotic Heart Disease", .N]/high_risk_cases_count)*100)
+  risk_reason_cyanotic <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Cyanotic Heart Disease", .N]), " (", risk_reason_cyanotic_pc, "%)")
+  risk_reason_repaired_congenitial_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Repaired Congenital Heart Disease", .N]/high_risk_cases_count)*100)
+  risk_reason_repaired_congenitial <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Repaired Congenital Heart Disease", .N]),
+                                             " (", risk_reason_repaired_congenitial_pc, "%)")
+  risk_reason_shunt_conduit_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Palliative Shunt or Conduit", .N]/high_risk_cases_count)*100)
+  risk_reason_shunt_conduit <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Palliative Shunt or Conduit", .N]),
+                                      " (", risk_reason_shunt_conduit_pc, "%)")
+  risk_reason_prosthetic_heart_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Prosthetic Heart/VAD", .N]/high_risk_cases_count)*100)
+  risk_reason_prosthetic_heart <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Prosthetic Heart/VAD", .N]),
+                                         " (", risk_reason_prosthetic_heart_pc, "%)")
+  
+  
+  risk_reason_rheumatic_fever_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Previous Rheumatic Fever", .N]/medium_risk_cases_count)*100)
+  risk_reason_rheumatic_fever <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Previous Rheumatic Fever", .N]),
+                                        " (", risk_reason_rheumatic_fever_pc, "%)")
+  risk_reason_non_rheumatic_valve_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Non-Rheumatic Valve", .N]/medium_risk_cases_count)*100)
+  risk_reason_non_rheumatic_valve <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Non-Rheumatic Valve", .N]),
+                                            " (", risk_reason_non_rheumatic_valve_pc, "%)")
+  risk_reason_congenital_valve_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Congenital Valve Anomalies", .N]/medium_risk_cases_count)*100)
+  risk_reason_congenital_valve <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Congenital Valve Anomalies", .N]),
+                                         " (", risk_reason_congenital_valve_pc,  "%)")
+  risk_reason_hypertrophic_cardiomyopathy_pc <- sprintf("%.1f", (ie_cohort_broad[risk_category == "Hypertrophic Cardiomyopathy", .N]/medium_risk_cases_count)*100)
+  risk_reason_hypertrophic_cardiomyopathy <- paste0(sprintf("%1.0f", ie_cohort_broad[risk_category == "Hypertrophic Cardiomyopathy", .N]),
+                                                    " (", risk_reason_hypertrophic_cardiomyopathy_pc,"%)")
+  
+  
+  causal_org_yes_pc <- sprintf("%.1f", (ie_cohort_broad[any_causal_organism == TRUE, .N]/causal_org_yes_count)*100)
+  causal_org_yes <- paste0(sprintf("%1.0f", ie_cohort_broad[any_causal_organism == TRUE, .N]), " (", causal_org_yes_pc, "%)")
+  causal_org_no_pc <- sprintf("%.1f", (ie_cohort_broad[any_causal_organism == FALSE, .N]/causal_org_yes_count)*100)
+  causal_org_no <- paste0(sprintf("%1.0f", ie_cohort_broad[any_causal_organism == FALSE, .N]), " (", causal_org_no_pc, "%)")
+  
+  
+## These causal orgs are to do with the IE admission and not the invasive procedure  
+  organisms <- ie_cohort_broad[, .N, by = .(any_causal_organism, all_staphylococcal_ie, group_a_streptococci_ie, group_b_streptococci_ie,
+                                            group_d_streptococci_ie, non_strep_non_staph_ie, other_streptococci_ie, streptococci_pneumonia_ie,
+                                            unspecified_streptococci_ie)]
+  organisms <- organisms[, org_count := rowSums(organisms[, .(all_staphylococcal_ie, group_a_streptococci_ie, group_b_streptococci_ie,
+                                            group_d_streptococci_ie, non_strep_non_staph_ie, other_streptococci_ie, streptococci_pneumonia_ie,
+                                            unspecified_streptococci_ie)])]
+  
+  
+  staphylococcal_pc <- sprintf("%.1f", (organisms[org_count == 1 & all_staphylococcal_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  staphylococcal <- paste0(sprintf("%1.0f", organisms[org_count == 1 & all_staphylococcal_ie == TRUE, sum(N)]), " (", staphylococcal_pc, "%)")
+  group_a_strep_pc <- sprintf("%.1f", (organisms[org_count == 1 & group_a_streptococci_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  group_a_strep <- paste0(sprintf("%1.0f", organisms[org_count == 1 & group_a_streptococci_ie == TRUE, sum(N)]), " (", group_a_strep_pc, "%)")
+  group_b_streptococci_pc <- sprintf("%.1f", (organisms[org_count == 1 & group_b_streptococci_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  group_b_streptococci <- paste0(sprintf("%1.0f", organisms[org_count == 1 & group_b_streptococci_ie == TRUE, sum(N)]), " (", group_b_streptococci_pc, "%)")
+  group_d_streptococci_pc <- sprintf("%.1f", (organisms[org_count == 1 & group_d_streptococci_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  group_d_streptococci <- paste0(sprintf("%1.0f", organisms[org_count == 1 & group_d_streptococci_ie == TRUE, sum(N)]), " (", group_d_streptococci_pc, "%)")
+  streptococci_pneumonia_pc <- sprintf("%.1f", (organisms[org_count == 1 & streptococci_pneumonia_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  streptococci_pneumonia <- paste0(sprintf("%1.0f", organisms[org_count == 1 & streptococci_pneumonia_ie == TRUE, sum(N)]),
+                                    " (", streptococci_pneumonia_pc, "%)")
+  other_streptococci_pc <- sprintf("%.1f", (organisms[org_count == 1 & other_streptococci_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  other_streptococci <- paste0(sprintf("%1.0f", organisms[org_count == 1 & other_streptococci_ie == TRUE, sum(N)]), " (", other_streptococci_pc, "%)")
+  unspecified_streptococci_pc <- sprintf("%.1f", (organisms[org_count == 1 & unspecified_streptococci_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  unspecified_streptococci <- paste0(sprintf("%1.0f", organisms[org_count == 1 & unspecified_streptococci_ie == TRUE, sum(N)])
+                                     , " (", unspecified_streptococci_pc, "%)")
+  non_strep_non_staph_pc <- sprintf("%.1f", (organisms[org_count == 1 & non_strep_non_staph_ie == TRUE, sum(N)]/causal_org_yes_count)*100)
+  non_strep_non_staph <- paste0(sprintf("%1.0f", organisms[org_count == 1 & non_strep_non_staph_ie == TRUE, sum(N)]), " (", non_strep_non_staph_pc, "%)")
+  mixed_orgs_pc <- sprintf("%.1f", (organisms[org_count > 1, sum(N)]/causal_org_yes_count)*100)
+  mixed_orgs <- paste0(sprintf("%1.0f", organisms[org_count > 1, sum(N)]), " (", mixed_orgs_pc, "%)")
+  
+  
+  admission_meth <- sprintf("%1.0f", ie_cohort_broad[!is.na(non_elective_admission), .N])
+  admission_meth_non_elect_pc <- sprintf("%.1f", (ie_cohort_broad[non_elective_admission == TRUE, .N]/admission_meth_count)*100)
+  admission_meth_non_elect <- paste0(sprintf("%1.0f", ie_cohort_broad[non_elective_admission == TRUE, .N]), " (", admission_meth_non_elect_pc, "%)")
+  admission_meth_elect_pc <- sprintf("%.1f", (ie_cohort_broad[non_elective_admission == FALSE, .N]/admission_meth_count)*100)
+  admission_meth_elect <- paste0(sprintf("%1.0f", ie_cohort_broad[non_elective_admission == FALSE, .N]), " (", admission_meth_elect_pc, "%)")
+  
+  admission_date <- sprintf("%1.0f", ie_cohort_broad[!is.na(ADMIDATE), .N])
+  admission_date_min <- format(as.Date(ie_cohort_broad[!is.na(ADMIDATE), min(ADMIDATE)]), format = "%d %B, %Y")
+  admission_date_max <- format(as.Date(ie_cohort_broad[!is.na(ADMIDATE), max(ADMIDATE)]), format = "%d %B, %Y")
+  
+  discharge_date <- sprintf("%1.0f", ie_cohort_broad[!is.na(discharge_date), .N])
+  discharge_date <- ie_cohort_broad[!is.na(discharge_date), .N]
+  discharge_date_min <- format(as.Date(ie_cohort_broad[!is.na(discharge_date), min(discharge_date)]), format = "%d %B, %Y")
+  discharge_date_max <- format(as.Date(ie_cohort_broad[!is.na(discharge_date), max(discharge_date)]), format = "%d %B, %Y")
+  
+  hospital_stay_length_count <- sprintf("%1.0f", ie_cohort_broad[!is.na(length_of_stay), .N])
+  hospital_stay_length_SD <- sprintf("%.1f", ie_cohort_broad[!is.na(length_of_stay), sd(length_of_stay)])
+  hospital_stay_length_mean_SD <- paste0(sprintf("%.1f", ie_cohort_broad[!is.na(length_of_stay), mean(length_of_stay)]), " (", hospital_stay_length_SD, ")")
+  hospital_stay_length_min <- sprintf("%1.0f", ie_cohort_broad[!is.na(length_of_stay), min(length_of_stay)])
+  hospital_stay_length_max <- sprintf("%1.0f", ie_cohort_broad[!is.na(length_of_stay), max(length_of_stay)])
+  hospital_stay_length_median_min_max <- paste0(sprintf("%.1f", ie_cohort_broad[!is.na(length_of_stay), median(length_of_stay)]),
+                                        " (", hospital_stay_length_min, ", ", hospital_stay_length_max, ")")
+  
+  discharged_alive <- sprintf("%1.0f", ie_cohort_broad[!is.na(discharged_alive), .N])
+  discharged_alive_yes_pc <- sprintf("%.1f", (ie_cohort_broad[discharged_alive == TRUE, .N]/discharged_alive_count)*100)
+  discharged_alive_yes <- paste0(sprintf("%1.0f", ie_cohort_broad[discharged_alive == TRUE, .N]), " (", discharged_alive_yes_pc, "%)")
+  discharged_alive_no_pc <- sprintf("%.1f", (ie_cohort_broad[discharged_alive == FALSE, .N]/discharged_alive_count)*100)
+  discharged_alive_no <- paste0(sprintf("%1.0f", ie_cohort_broad[discharged_alive == FALSE, .N]), " (", discharged_alive_no_pc, "%)")
+  
+  
+## Bind all values and put in a datatable
+  
+  all_ie_characteristics <- rbind(age_cases, age_mean_SD, age_median_min_max, sex_cases, male, female, risk_level_case,
+                                  high_risk, moderate_risk, low_unknown_risk,risk_reason_previous, risk_reason_previous_I38X, risk_reason_replacement_valve,
+                                  risk_reason_repaired_valve, risk_reason_cyanotic, risk_reason_repaired_congenitial, risk_reason_shunt_conduit,
+                                  risk_reason_prosthetic_heart, risk_reason_rheumatic_fever, risk_reason_non_rheumatic_valve, risk_reason_congenital_valve,
+                                  risk_reason_hypertrophic_cardiomyopathy, causal_org_yes,causal_org_no, staphylococcal, group_a_strep,
+                                  group_b_streptococci, group_d_streptococci, streptococci_pneumonia, other_streptococci, unspecified_streptococci,
+                                  non_strep_non_staph, mixed_orgs, admission_meth, admission_meth_non_elect,admission_meth_elect, admission_date, admission_date_min,
+                                  admission_date_max, discharge_date, discharge_date_min, discharge_date_max, hospital_stay_length_count,
+                                  hospital_stay_length_mean_SD, hospital_stay_length_median_min_max, discharged_alive, discharged_alive_yes, discharged_alive_no)
+  
+  
+## Change of causal org numbers from IDEA  is due to A41.9 being removed from the list
+  
+  IE_admissions_characteristics <- data.table(characteristic = row.names(all_ie_characteristics), all_ie = all_ie_characteristics)
+  
+  setnames(IE_admissions_characteristics, "all_ie.V1", "all_IE")
+
+
+
+```
+
+
+### Characteristics of the study population
+
+
+#### Table 1: Characteristics of all IE admissions
+
+```{r table_1}
+kable_styling(kbl(IE_admissions_characteristics, row.names = FALSE), bootstrap_options = c("striped", "hover", "condensed"), fixed_thead = TRUE)
+```
+*Notes:* 
+<!-- All numbers have been rounded to the nearest 5, and numbers less than 8 suppressed. All percentages are calculated using the rounded counts. -->  
+All means, SDs, medians, mins and maxes exclude any records with missing data in the relevant column. Percentages for types of causal organism use the number of admissions with a causal organism identified as the denominator. Percentages for risk use the number of admissions in the risk level as the denominator (e.g. previous_IE/high_risk_count). 'mixed_orgs' means at least two of the causal organism types identified here (staph, strep_a, strep_b, strep_d, strep_pneumonia, other_strep, unspecified_strep, or non_strep_non_staph). Elective admissions includes waiting list, booked, planned non-emergency transfers from another hospital and admission method undefined. Length of stay numbers are in days.
+
+<br>
+
+
