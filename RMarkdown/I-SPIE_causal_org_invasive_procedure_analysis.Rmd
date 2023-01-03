@@ -229,16 +229,6 @@ createOutputTableGIIntervention <- function(table) {
   
   invasive_before_ie_heart_rule_without <- invasive_before_ie_heart_rule[months_to_admission_without_admi_day >= -3L]
   
-## Do we need to do this? ###
-  
-# ## Further reduction of cohort for stats checking - Feb-2022
-# ## Keep only the first observation for each patient-procedure-month
-#   
-#   setorder(invasive_before_ie_heart_rule_without, ENCRYPTED_HESID, ie_ADMIDATE, invasive_procedure, months_to_admission_without_admi_day)
-#   
-#   invasive_before_ie_heart_rule_without[, procedure_count := 1:.N, by = .(ENCRYPTED_HESID, invasive_procedure, months_to_admission_without_admi_day)]
-#   
-#   single_procedure_month_patient <- invasive_before_ie_heart_rule_without[procedure_count == 1L]
 
 ```
 
