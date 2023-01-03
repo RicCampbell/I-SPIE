@@ -1,0 +1,145 @@
+---
+title: "all_invasive_procedures_check"
+author: "Ric Campbell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+## FOR INTERNAL PROJECT USE ONLY, PLEASE DO NOT SHARE BEYOND PROJECT TEAM
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(data.table)
+library(ggplot2)
+library(scales)
+library(kableExtra)
+library(lubridate)
+library(readxl)
+
+## Want to look at everything as well, not just once we've reduced the number of invasive procedure
+
+  cohort_A <- fread("D:/I-SPIEDM/I-SPIEDM/data-raw/src_data/COHORT_A_1999_2015_WITHOUT_PII.txt",
+                    colClasses = "character",
+                    na.strings = "")
+
+
+## Change ADMIDATE to an actual date for sorting
+
+  cohort_A[, ADMIDATE := as.Date(ADMIDATE, format = "%Y-%m-%d")]
+
+
+## Read in invasive procedure codes from spreadsheet 
+
+  invasive_surgical_sheet <- data.table(read_excel("D:/I-SPIEDM/I-SPIEDM/reference_data/ICD OPCS Codes.xlsx",
+                                                 sheet = "Invasive Surgical Procedures",
+                                                 col_names = TRUE,
+                                                 col_types = "text",
+                                                 trim_ws = TRUE))
+
+  
+  invasive_surgical_sheet[, standard_opcs_code := gsub("[.]","", opcs_code )]
+  
+  
+## Melt the cohort, both for opcs codes and icd-10 codes, and identify those that have the correct diagnosis/procedure
+## OPCS for invasive medical procedures,
+## OPCS for heart valve repair/replacement,
+
+  code_fields <- paste0("OPERTN_", formatC(1:24, width = 2, format = "d", flag = "0"))
+  
+  standard_fields <- c("ENCRYPTED_HESID", "ADMIDATE", "EPIORDER", "EPIKEY", "EPISTART", "ADMIMETH")
+  
+  melted_cohort_opcs <- melt(cohort_A[, .SD, .SDcols = c(standard_fields, code_fields)],
+                        measure.vars = code_fields, variable.name = "outcome_numb", value.name = "diag_code")
+  
+  melted_cohort_opcs <- melted_cohort_opcs[!is.na(diag_code)]
+  melted_cohort_opcs[, diag_code := substr(diag_code, 1, 4)]
+  melted_cohort_opcs[, outcome_numb := as.character(outcome_numb)]
+  melted_cohort_opcs[, outcome_numb := substr(outcome_numb, (nchar(outcome_numb)-1), nchar(outcome_numb))]
+  melted_cohort_opcs[, outcome_numb := as.integer(outcome_numb)]
+
+  
+## Remove rows where 'No operation performed' "-", or 'Not known' "&"
+  
+  melted_cohort_opcs <- melted_cohort_opcs[!(diag_code == "-" | diag_code == "&")]
+
+
+## Check that all codes are of 4 characters and do not contain 3 character codes
+  
+  stopifnot(min(nchar(melted_cohort_opcs$diag_code), na.rm = TRUE) == 4)
+  stopifnot(max(nchar(melted_cohort_opcs$diag_code), na.rm = TRUE) == 4)
+  
+
+## Merge with invasive surgical procedure to add information about procedure. Only want records with procedure that is of interest
+  
+  melted_cohort_invasive_procedure <- merge(melted_cohort_opcs,
+                                            invasive_surgical_sheet,
+                                            by.x = "diag_code",
+                                            by.y = "standard_opcs_code",
+                                            all = FALSE)
+
+
+####~~~~ Read in different file dependent on selection of procedures want to look at ~~~~~~####    
+
+  invasive_procedures <- readRDS("D:/I-SPIEDM/I-SPIEDM/data/datasets/first_invasive_procedure_per_procedure_per_date_patient_heart_rule.rds")
+
+
+## Create procedure year and month field
+
+  melted_cohort_invasive_procedure[, procedure_month := floor_date(ADMIDATE, unit = "month")]
+  
+  invasive_procedures[, procedure_year := floor_date(ADMIDATE, unit = "year")]
+  invasive_procedures[, procedure_month := floor_date(ADMIDATE, unit = "month")]
+
+  
+## Give all invasive procedures an ID
+
+  invasive_procedures[, id := 1:.N]
+
+
+## Retain only records that have an invasive procedure that follows the heart rule (certain procedures can't be on same admissions as heart valve repair/replace)
+
+  invasive_heart_rule <- invasive_procedures[valid_procedure_including_heart_rule == TRUE]
+
+  
+## Create table of number of invasive procedures per year, and split by procedure groups
+  
+  all_invasive_procedures_groups_month <- melted_cohort_invasive_procedure[, .N, by = .(procedure_month,
+                                                                                        procedure_group)][order(procedure_month,
+                                                                                                                procedure_group)]
+  
+  invasive_procedure_month <- invasive_heart_rule[, .N, by = procedure_month][order(procedure_month)]
+  
+  
+  invasive_procedure_groups_per_month <- invasive_heart_rule[, .N, by = .(procedure_month,
+                                                                         procedure_group)][order(procedure_month,
+                                                                                                 procedure_group)]
+  
+
+```
+
+
+```{r, plots, echo=FALSE}
+
+  ggplot(all_invasive_procedures_groups_month[],
+         mapping = aes(x = procedure_month, y = N, color = procedure_group)) +
+    geom_point() +
+    geom_smooth() +
+    ggtitle("Total of all invasive procedures per month")
+  
+  
+  ggplot(invasive_procedure_month[],
+         mapping = aes(x = procedure_month, y = N)) +
+    geom_point() +
+    geom_smooth() +
+    ggtitle("Total invasive procedures limited to one procedure type per person per admission date by month")
+  
+  
+  ggplot(invasive_procedure_groups_per_month[],
+         mapping = aes(x = procedure_month, y = N, color = procedure_group)) +
+    geom_point() +
+    geom_smooth() +
+    ggtitle("Invasive procedures limited to one procedure type per person per admission date by groups by month")
+
+
+```
